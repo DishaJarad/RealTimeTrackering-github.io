@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live GPS Path Tracking</title>
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js"></script>
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    #map {
+      height: 500px;
+      width: 100%;
+      margin-top: 20px;
+    }
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Live GPS Path Tracking</h1>
+  <button id="startSharing" class="hidden">Start Sharing Location</button>
+  <div id="destinationForm" class="hidden">
+    <label for="destinationLat">Destination Latitude:</label>
+    <input type="text" id="destinationLat" placeholder="e.g., 37.7749" />
+    <label for="destinationLng">Destination Longitude:</label>
+    <input type="text" id="destinationLng" placeholder="e.g., -122.4194" />
+    <button id="setDestination">Set Destination</button>
+  </div>
+  <div id="locationDisplay"></div>
+  <div id="map"></div>
+
+  <script>
+    // Firebase Config
+    const firebaseConfig = {
+      apiKey: "AIzaSyDmPg_yetiIglgd_Or64ogeU7263ptb11A",
+      authDomain: "real-time-tracking-7dd0d.firebaseapp.com",
+      databaseURL: "https://real-time-tracking-7dd0d-default-rtdb.firebaseio.com",
+      projectId: "real-time-tracking-7dd0d",
+      storageBucket: "real-time-tracking-7dd0d.appspot.com",
+      messagingSenderId: "139938078018",
+      appId: "1:139938078018:web:91dc384a01a2583058fcdb",
+      measurementId: "G-L1KLT8CB12"
+    };
+
+    // Initialize Firebase
+    const app = firebase.initializeApp(firebaseConfig);
+    const database = firebase.database(app);
+
+    // DOM Elements
+    const locationDisplay = document.getElementById('locationDisplay');
+    const startSharing = document.getElementById('startSharing');
+    const destinationForm = document.getElementById('destinationForm');
+    const destinationLatInput = document.getElementById('destinationLat');
+    const destinationLngInput = document.getElementById('destinationLng');
+    let map, marker, polyline, destinationMarker;
+    let path = []; // Array to store the path coordinates
+
+    // Get URL Params to Identify Device (Phone or Laptop)
+    const params = new URLSearchParams(window.location.search);
+    const role = params.get('role'); // "phone" or "laptop"
+
+    if (role === 'phone') {
+      // Phone Role: Share Live Location
+      startSharing.classList.remove('hidden');
+      destinationForm.classList.remove('hidden');
+
+      // Start sharing location
+      startSharing.addEventListener('click', () => {
+        if ('geolocation' in navigator) {
+          navigator.geolocation.watchPosition(
+            (position) => {
+              const coords = {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+              };
+              firebase.database().ref('location').set(coords); // Update live location
+              firebase.database().ref('path').push(coords); // Append to path
+            },
+            (error) => alert('Error fetching location: ' + error.message),
+            { enableHighAccuracy: true }
+          );
+        } else {
+          alert('Geolocation is not supported by your browser.');
+        }
+      });
+
+      // Set destination
+      document.getElementById('setDestination').addEventListener('click', () => {
+        const lat = parseFloat(destinationLatInput.value);
+        const lng = parseFloat(destinationLngInput.value);
+        if (!isNaN(lat) && !isNaN(lng)) {
+          firebase.database().ref('destination').set({ latitude: lat, longitude: lng });
+          alert('Destination set successfully!');
+        } else {
+          alert('Invalid destination coordinates.');
+        }
+      });
+    } else if (role === 'laptop') {
+      // Laptop Role: Track Location and Path
+      startSharing.classList.add('hidden');
+      destinationForm.classList.add('hidden');
+
+      // Initialize map
+      map = L.map('map').setView([0, 0], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+
+      // Add marker and polyline
+      marker = L.marker([0, 0]).addTo(map);
+      polyline = L.polyline([], { color: 'blue', weight: 4 }).addTo(map);
+
+      // Add destination marker
+      destinationMarker = L.marker([0, 0], {
+        icon: L.icon({
+          iconUrl: 'https://leafletjs.com/examples/custom-icons/leaf-red.png',
+          iconSize: [25, 41],
+          iconAnchor: [12, 41]
+        })
+      }).addTo(map);
+
+      // Update map when location changes
+      firebase.database().ref('location').on('value', (snapshot) => {
+        const location = snapshot.val();
+        if (location) {
+          const { latitude, longitude } = location;
+          locationDisplay.innerHTML = `Phone Location: Latitude ${latitude}, Longitude ${longitude}`;
+          marker.setLatLng([latitude, longitude]); // Update marker position
+          map.setView([latitude, longitude], 15); // Center map
+        }
+      });
+
+      // Track path changes
+      firebase.database().ref('path').on('child_added', (snapshot) => {
+        const point = snapshot.val();
+        if (point) {
+          path.push([point.latitude, point.longitude]); // Add new point to path
+          polyline.setLatLngs(path); // Update polyline
+        }
+      });
+
+      // Track destination changes
+      firebase.database().ref('destination').on('value', (snapshot) => {
+        const destination = snapshot.val();
+        if (destination) {
+          const { latitude, longitude } = destination;
+          destinationMarker.setLatLng([latitude, longitude]); // Update destination marker
+          destinationMarker.bindPopup('Destination').openPopup();
+          locationDisplay.innerHTML += `<br>Destination: Latitude ${latitude}, Longitude ${longitude}`;
+        }
+      });
+    } else {
+      locationDisplay.innerHTML = 'Please specify "?role=phone" or "?role=laptop" in the URL.';
+    }
+  </script>
+</body>
+</html>
